@@ -1,0 +1,12 @@
+# Unreal generated folders
+Binaries/
+Intermediate/
+Saved/
+DerivedDataCache/
+
+# IDE / OS
+.vs/
+*.sln
+*.suo
+*.user
+.DS_Store
