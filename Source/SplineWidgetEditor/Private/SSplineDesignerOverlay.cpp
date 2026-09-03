@@ -62,6 +62,72 @@ bool SSplineDesignerOverlay::GetWidgetGeometry(FGeometry& OutGeometry) const
 	return Designer->GetWidgetGeometry(SelectedWidget, OutGeometry);
 }
 
+void SSplineDesignerOverlay::GetHandleBoundsControl(FVector2D& OutMin, FVector2D& OutMax) const
+{
+	TArray<FSplineControlPoint> Points;
+	bool bClosed = false;
+	GetDisplayPoints(Points, bClosed);
+
+	if (Points.Num() == 0)
+	{
+		OutMin = FVector2D::ZeroVector;
+		OutMax = FVector2D::ZeroVector;
+		return;
+	}
+
+	OutMin = FVector2D(TNumericLimits<double>::Max(), TNumericLimits<double>::Max());
+	OutMax = FVector2D(TNumericLimits<double>::Lowest(), TNumericLimits<double>::Lowest());
+
+	auto Accumulate = [&OutMin, &OutMax](const FVector2D& P)
+	{
+		OutMin.X = FMath::Min(OutMin.X, P.X);
+		OutMin.Y = FMath::Min(OutMin.Y, P.Y);
+		OutMax.X = FMath::Max(OutMax.X, P.X);
+		OutMax.Y = FMath::Max(OutMax.Y, P.Y);
+	};
+
+	for (const FSplineControlPoint& Point : Points)
+	{
+		Accumulate(Point.Location);
+		Accumulate(Point.Location + Point.ArriveTangent);
+		Accumulate(Point.Location + Point.LeaveTangent);
+	}
+
+	// Always include the widget's own local box so the overlay never shrinks below it.
+	Accumulate(FVector2D::ZeroVector);
+}
+
+FVector2D SSplineDesignerOverlay::GetOriginControl() const
+{
+	FVector2D MinC, MaxC;
+	GetHandleBoundsControl(MinC, MaxC);
+	return MinC - FVector2D(HandleMarginControl, HandleMarginControl);
+}
+
+FVector2D SSplineDesignerOverlay::ComputeSlotOffset() const
+{
+	if (!Designer || !SelectedWidget.IsValid())
+	{
+		return FVector2D::ZeroVector;
+	}
+
+	FGeometry WidgetGeom;
+	FGeometry ParentGeom;
+	if (!Designer->GetWidgetGeometry(SelectedWidget, WidgetGeom) ||
+		!Designer->GetWidgetParentGeometry(SelectedWidget, ParentGeom))
+	{
+		return FVector2D::ZeroVector;
+	}
+
+	// RelativeFromParent places the slot at the parent's top-left plus this offset, all in
+	// designer-local pixels. Move it so the slot's top-left lands on the handle-bounds origin.
+	const FGeometry DesignerGeom = Designer->GetDesignerGeometry();
+	const FVector2D OriginControl = GetOriginControl();
+	const FVector2D OriginDesigner = DesignerGeom.AbsoluteToLocal(WidgetGeom.LocalToAbsolute(OriginControl));
+	const FVector2D ParentDesigner = DesignerGeom.AbsoluteToLocal(ParentGeom.LocalToAbsolute(FVector2D::ZeroVector));
+	return OriginDesigner - ParentDesigner;
+}
+
 float SSplineDesignerOverlay::GetContentScale(const FGeometry& OverlayGeometry) const
 {
 	if (!Designer)
@@ -105,11 +171,13 @@ int32 SSplineDesignerOverlay::HitTestControlPoint(const FVector2D& MouseLocal, f
 	bool bClosed = false;
 	GetDisplayPoints(Points, bClosed);
 
+	const FVector2D OriginControl = GetOriginControl();
 	int32 BestIndex = INDEX_NONE;
 	double BestDistSq = static_cast<double>(ControlHandleRadius * ControlHandleRadius);
 	for (int32 i = 0; i < Points.Num(); ++i)
 	{
-		const double DistSq = FVector2D::DistSquared(Points[i].Location * ContentScale, MouseLocal);
+		const FVector2D HandleLocal = (Points[i].Location - OriginControl) * ContentScale;
+		const double DistSq = FVector2D::DistSquared(HandleLocal, MouseLocal);
 		if (DistSq <= BestDistSq)
 		{
 			BestDistSq = DistSq;
@@ -125,12 +193,13 @@ bool SSplineDesignerOverlay::HitTestTangent(const FVector2D& MouseLocal, float C
 	bool bClosed = false;
 	GetDisplayPoints(Points, bClosed);
 
+	const FVector2D OriginControl = GetOriginControl();
 	double BestDistSq = static_cast<double>(TangentHandleRadius * TangentHandleRadius);
 	OutPointIndex = INDEX_NONE;
 	for (int32 i = 0; i < Points.Num(); ++i)
 	{
-		const FVector2D ArrivePos = (Points[i].Location + Points[i].ArriveTangent) * ContentScale;
-		const FVector2D LeavePos = (Points[i].Location + Points[i].LeaveTangent) * ContentScale;
+		const FVector2D ArrivePos = (Points[i].Location + Points[i].ArriveTangent - OriginControl) * ContentScale;
+		const FVector2D LeavePos = (Points[i].Location + Points[i].LeaveTangent - OriginControl) * ContentScale;
 
 		const double ArriveDistSq = FVector2D::DistSquared(ArrivePos, MouseLocal);
 		if (ArriveDistSq <= BestDistSq)
@@ -187,6 +256,7 @@ int32 SSplineDesignerOverlay::OnPaint(const FPaintArgs& Args, const FGeometry& A
 	const int32 LineLayer = LayerId + 1;
 	const int32 HandleLayer = LayerId + 2;
 	const float ContentScale = GetContentScale(AllottedGeometry);
+	const FVector2D OriginControl = GetOriginControl();
 
 	auto DrawHandle = [&](const FVector2D& LocalPos, float Radius, const FLinearColor& Color, int32 Layer)
 	{
@@ -203,10 +273,11 @@ int32 SSplineDesignerOverlay::OnPaint(const FPaintArgs& Args, const FGeometry& A
 
 	for (int32 i = 0; i < Points.Num(); ++i)
 	{
-		// Overlay-local space = control-point space * ContentScale (to match zoom/DPI).
-		const FVector2D CenterLocal = Points[i].Location * ContentScale;
-		const FVector2D ArriveLocal = (Points[i].Location + Points[i].ArriveTangent) * ContentScale;
-		const FVector2D LeaveLocal = (Points[i].Location + Points[i].LeaveTangent) * ContentScale;
+		// Overlay-local space = (control-point space - origin) * ContentScale, so handles
+		// outside the widget box (origin < 0) still land inside the overlay's slot.
+		const FVector2D CenterLocal = (Points[i].Location - OriginControl) * ContentScale;
+		const FVector2D ArriveLocal = (Points[i].Location + Points[i].ArriveTangent - OriginControl) * ContentScale;
+		const FVector2D LeaveLocal = (Points[i].Location + Points[i].LeaveTangent - OriginControl) * ContentScale;
 
 		// Tangent connector lines.
 		TArray<FVector2D> ArriveLine = { CenterLocal, ArriveLocal };
@@ -290,7 +361,7 @@ FReply SSplineDesignerOverlay::OnMouseButtonDoubleClick(const FGeometry& MyGeome
 
 	const float ContentScale = GetContentScale(MyGeometry);
 	const FVector2D MouseLocal = MyGeometry.AbsoluteToLocal(MouseEvent.GetScreenSpacePosition());
-	const FVector2D MouseControl = (ContentScale > KINDA_SMALL_NUMBER) ? MouseLocal / ContentScale : MouseLocal;
+	const FVector2D MouseControl = ((ContentScale > KINDA_SMALL_NUMBER) ? MouseLocal / ContentScale : MouseLocal) + GetOriginControl();
 
 	// Find the nearest segment by sampling.
 	TArray<FSplineControlPoint> Points;
@@ -346,7 +417,7 @@ FReply SSplineDesignerOverlay::OnMouseMove(const FGeometry& MyGeometry, const FP
 
 	const float ContentScale = GetContentScale(MyGeometry);
 	const FVector2D MouseLocal = MyGeometry.AbsoluteToLocal(MouseEvent.GetScreenSpacePosition());
-	const FVector2D MouseControl = (ContentScale > KINDA_SMALL_NUMBER) ? MouseLocal / ContentScale : MouseLocal;
+	const FVector2D MouseControl = ((ContentScale > KINDA_SMALL_NUMBER) ? MouseLocal / ContentScale : MouseLocal) + GetOriginControl();
 
 	if (DragMode == EDragMode::None)
 	{
@@ -429,20 +500,22 @@ FCursorReply SSplineDesignerOverlay::OnCursorQuery(const FGeometry& MyGeometry, 
 
 FVector2D SSplineDesignerOverlay::ComputeDesiredSize(float LayoutScaleMultiplier) const
 {
-	// The designer sizes this overlay's canvas slot from GetDesiredSize(). A zero
-	// size means no hit-test area (no mouse input) and culled painting, so the overlay
-	// must span the selected widget's on-screen bounds (local size scaled by zoom/DPI).
-	FGeometry WidgetGeom;
-	if (GetWidgetGeometry(WidgetGeom))
+	// The designer sizes this overlay's canvas slot from GetDesiredSize(). A zero size means
+	// no hit-test area (no mouse input) and culled painting, so the overlay must span every
+	// interactive handle (control points and tangent endpoints), including handles that fall
+	// outside the selected widget's own box. Size is in overlay-local space (control units
+	// scaled by the zoom/DPI factor).
+	FVector2D MinC, MaxC;
+	GetHandleBoundsControl(MinC, MaxC);
+
+	const FVector2D OriginControl = GetOriginControl();
+	FVector2D SpanControl = (MaxC + FVector2D(HandleMarginControl, HandleMarginControl)) - OriginControl;
+
+	if (Designer && LayoutScaleMultiplier > KINDA_SMALL_NUMBER)
 	{
-		FVector2D LocalSize = WidgetGeom.GetLocalSize();
-		if (Designer && LayoutScaleMultiplier > KINDA_SMALL_NUMBER)
-		{
-			LocalSize *= Designer->GetPreviewScale() / LayoutScaleMultiplier;
-		}
-		return FVector2D(FMath::Max(LocalSize.X, 1.0), FMath::Max(LocalSize.Y, 1.0));
+		SpanControl *= Designer->GetPreviewScale() / LayoutScaleMultiplier;
 	}
-	return FVector2D(1.0, 1.0);
+	return FVector2D(FMath::Max(SpanControl.X, 1.0), FMath::Max(SpanControl.Y, 1.0));
 }
 
 #undef LOCTEXT_NAMESPACE

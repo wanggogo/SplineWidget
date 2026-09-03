@@ -21,6 +21,13 @@ public:
 
 	void Construct(const FArguments& InArgs);
 
+	/**
+	 * Offset (in designer-local pixels) for a RelativeFromParent surface element that moves
+	 * the overlay slot's top-left to the handle bounds origin, so the slot covers handles
+	 * that fall outside the selected widget's box. Recomputed each layout via a bound attribute.
+	 */
+	FVector2D ComputeSlotOffset() const;
+
 	virtual int32 OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect,
 		FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const override;
 
@@ -53,6 +60,20 @@ private:
 	bool GetWidgetGeometry(FGeometry& OutGeometry) const;
 
 	/**
+	 * Control-space bounds covering every interactive handle (control points and their
+	 * arrive/leave tangent endpoints). Used so the overlay slot spans all handles, even
+	 * those outside the widget's own bounding box.
+	 */
+	void GetHandleBoundsControl(FVector2D& OutMin, FVector2D& OutMax) const;
+
+	/**
+	 * Control-space coordinate that maps to the overlay's local origin (top-left). Equal to
+	 * the handle bounds minimum minus a fixed margin, so handles near/beyond the widget edge
+	 * remain inside the overlay and stay clickable.
+	 */
+	FVector2D GetOriginControl() const;
+
+	/**
 	 * Overlay-local units per control-point (widget-local) unit. The overlay lives in
 	 * the non-zoomed extension canvas (DPI scale only), while the widget content is
 	 * rendered at the preview scale (DPI * zoom), so control points must be scaled by
@@ -81,4 +102,7 @@ private:
 	/** Handle sizes / hit radii in screen pixels. */
 	static constexpr float ControlHandleRadius = 6.0f;
 	static constexpr float TangentHandleRadius = 5.0f;
+
+	/** Extra control-space padding around the handle bounds so handle boxes are not clipped. */
+	static constexpr float HandleMarginControl = 16.0f;
 };

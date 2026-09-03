@@ -38,7 +38,20 @@ void FSplineDesignerExtension::ExtendSelection(const TArray<FWidgetReference>& S
 		.Designer(Designer)
 		.SelectedWidget(Selected);
 
-	SurfaceElements.Add(MakeShared<FDesignerSurfaceElement>(Overlay, EExtensionLayoutLocation::TopLeft));
+	// Position the overlay relative to the parent with a dynamic offset so its slot top-left
+	// tracks the handle-bounds origin. This lets the slot cover control points and tangent
+	// handles that lie outside the selected widget's box, keeping them clickable.
+	TWeakPtr<SSplineDesignerOverlay> WeakOverlay = Overlay;
+	TAttribute<FVector2D> OffsetAttr = TAttribute<FVector2D>::Create([WeakOverlay]()
+	{
+		if (TSharedPtr<SSplineDesignerOverlay> Pinned = WeakOverlay.Pin())
+		{
+			return Pinned->ComputeSlotOffset();
+		}
+		return FVector2D::ZeroVector;
+	});
+
+	SurfaceElements.Add(MakeShared<FDesignerSurfaceElement>(Overlay, EExtensionLayoutLocation::RelativeFromParent, OffsetAttr));
 }
 
 TSharedRef<FDesignerExtension> FSplineDesignerExtensionFactory::CreateDesignerExtension() const
