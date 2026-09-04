@@ -4,6 +4,7 @@
 #include "SplineControlPoint.h"
 #include "SplineCurveUtils.h"
 #include "Components/CanvasPanelSlot.h"
+#include "UObject/UObjectGlobals.h"
 #include "Editor.h"
 #include "Rendering/DrawElements.h"
 #include "Styling/CoreStyle.h"
@@ -119,6 +120,17 @@ void SSplineDesignerOverlay::FitSlotToControlPoints() const
 			PreviewSlot->SetPosition(CanvasSlot->GetPosition());
 			PreviewSlot->SetSize(NewSize);
 		}
+	}
+
+	// Refresh the Details panel's Position/Size fields immediately. Broadcast the change
+	// directly to listeners (the details view) instead of calling PostEditChangeProperty:
+	// the slot's editor PostEditChangeChainProperty runs RebaseLayout against its saved
+	// PreEditGeometry, which is only valid mid-designer-drag; invoking it here would corrupt
+	// the slot's base layout and break the next widget move.
+	if (FProperty* LayoutProperty = FindFProperty<FProperty>(UCanvasPanelSlot::StaticClass(), TEXT("LayoutData")))
+	{
+		FPropertyChangedEvent ChangedEvent(LayoutProperty, EPropertyChangeType::ValueSet);
+		FCoreUObjectDelegates::OnObjectPropertyChanged.Broadcast(CanvasSlot, ChangedEvent);
 	}
 }
 
