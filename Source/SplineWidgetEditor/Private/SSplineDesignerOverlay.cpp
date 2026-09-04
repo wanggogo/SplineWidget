@@ -3,6 +3,7 @@
 #include "SplineWidget.h"
 #include "SplineControlPoint.h"
 #include "SplineCurveUtils.h"
+#include "Components/CanvasPanelSlot.h"
 #include "Editor.h"
 #include "Rendering/DrawElements.h"
 #include "Styling/CoreStyle.h"
@@ -50,6 +51,74 @@ void SSplineDesignerOverlay::SyncPreview() const
 		Preview->bClosed = Template->bClosed;
 		Preview->bAutoTangents = Template->bAutoTangents;
 		Preview->SynchronizeProperties();
+	}
+}
+
+void SSplineDesignerOverlay::FitSlotToControlPoints() const
+{
+	USplineWidget* Template = GetTemplateWidget();
+	if (!Template || Template->ControlPoints.Num() == 0)
+	{
+		return;
+	}
+
+	UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(Template->Slot);
+	if (!CanvasSlot)
+	{
+		// Only Canvas-parented widgets have an absolute slot to fit; no-op otherwise.
+		return;
+	}
+
+	// Bounding box of the control-point Locations (tangent handles are intentionally excluded).
+	FVector2D Min(TNumericLimits<double>::Max(), TNumericLimits<double>::Max());
+	FVector2D Max(TNumericLimits<double>::Lowest(), TNumericLimits<double>::Lowest());
+	for (const FSplineControlPoint& Point : Template->ControlPoints)
+	{
+		Min.X = FMath::Min(Min.X, Point.Location.X);
+		Min.Y = FMath::Min(Min.Y, Point.Location.Y);
+		Max.X = FMath::Max(Max.X, Point.Location.X);
+		Max.Y = FMath::Max(Max.Y, Point.Location.Y);
+	}
+
+	// Points are expressed relative to the current slot origin (point-space (0,0) == slot origin).
+	// The new slot origin should sit at the padded box top-left, so shift the slot by OriginDelta
+	// and subtract the same delta from every point to keep the curve visually fixed.
+	const FVector2D OriginDelta = Min - FVector2D(SlotPadding, SlotPadding);
+	const FVector2D NewSize = (Max - Min) + FVector2D(2.0 * SlotPadding, 2.0 * SlotPadding);
+
+	const FVector2D CurrentSize = CanvasSlot->GetSize();
+	const bool bOriginUnchanged = OriginDelta.IsNearlyZero(0.5);
+	const bool bSizeUnchanged = (CurrentSize - NewSize).IsNearlyZero(0.5);
+	if (bOriginUnchanged && bSizeUnchanged)
+	{
+		return;
+	}
+
+	Template->Modify();
+	CanvasSlot->Modify();
+	CanvasSlot->SetAnchors(FAnchors(0.0f, 0.0f, 0.0f, 0.0f));
+	CanvasSlot->SetAutoSize(false);
+	CanvasSlot->SetPosition(CanvasSlot->GetPosition() + OriginDelta);
+	CanvasSlot->SetSize(NewSize);
+
+	if (!bOriginUnchanged)
+	{
+		for (FSplineControlPoint& Point : Template->ControlPoints)
+		{
+			Point.Location -= OriginDelta;
+		}
+	}
+
+	// Mirror the slot geometry onto the preview instance so the canvas updates without a compile.
+	if (UWidget* PreviewWidget = SelectedWidget.GetPreview())
+	{
+		if (UCanvasPanelSlot* PreviewSlot = Cast<UCanvasPanelSlot>(PreviewWidget->Slot))
+		{
+			PreviewSlot->SetAnchors(FAnchors(0.0f, 0.0f, 0.0f, 0.0f));
+			PreviewSlot->SetAutoSize(false);
+			PreviewSlot->SetPosition(CanvasSlot->GetPosition());
+			PreviewSlot->SetSize(NewSize);
+		}
 	}
 }
 
@@ -332,6 +401,7 @@ FReply SSplineDesignerOverlay::OnMouseButtonDown(const FGeometry& MyGeometry, co
 			{
 				BeginEdit(LOCTEXT("DeletePoint", "Delete Spline Point"));
 				Template->ControlPoints.RemoveAt(PointIndex);
+				FitSlotToControlPoints();
 				SyncPreview();
 				if (Designer)
 				{
@@ -397,6 +467,7 @@ FReply SSplineDesignerOverlay::OnMouseButtonDoubleClick(const FGeometry& MyGeome
 	FSplineControlPoint NewPoint(MouseControl);
 	const int32 InsertIndex = FMath::Min(BestSegment + 1, Template->ControlPoints.Num());
 	Template->ControlPoints.Insert(NewPoint, InsertIndex);
+	FitSlotToControlPoints();
 	SyncPreview();
 	if (Designer)
 	{
@@ -468,6 +539,13 @@ FReply SSplineDesignerOverlay::OnMouseButtonUp(const FGeometry& MyGeometry, cons
 	{
 		DragMode = EDragMode::None;
 		ActivePointIndex = INDEX_NONE;
+		// Fit the slot once at the end of the drag (not per-move) to avoid mid-drag jitter.
+		FitSlotToControlPoints();
+		SyncPreview();
+		if (Designer)
+		{
+			Designer->MarkDesignModifed(false);
+		}
 		EndEdit();
 		return FReply::Handled().ReleaseMouseCapture();
 	}

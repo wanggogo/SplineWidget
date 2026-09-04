@@ -70,6 +70,7 @@ public:
 	virtual void ReleaseSlateResources(bool bReleaseChildren) override;
 #if WITH_EDITOR
 	virtual const FText GetPaletteCategory() override;
+	virtual void OnCreationFromPalette() override;
 #endif
 	//~ End UWidget interface
 

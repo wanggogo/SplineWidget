@@ -1,6 +1,7 @@
 #include "SplineWidget.h"
 #include "SSplineWidget.h"
 #include "SplineCurveUtils.h"
+#include "Components/CanvasPanelSlot.h"
 
 #define LOCTEXT_NAMESPACE "SplineWidget"
 
@@ -108,6 +109,19 @@ void USplineWidget::SetFillColor(FLinearColor InFillColor)
 const FText USplineWidget::GetPaletteCategory()
 {
 	return LOCTEXT("Spline", "Spline");
+}
+
+void USplineWidget::OnCreationFromPalette()
+{
+	Super::OnCreationFromPalette();
+
+	// When first placed on a Canvas Panel, anchor top-left so the slot is expressed with
+	// absolute, top-left-relative offsets. This is the basis for the designer's slot auto-fit.
+	if (UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(Slot))
+	{
+		CanvasSlot->SetAnchors(FAnchors(0.0f, 0.0f, 0.0f, 0.0f));
+		CanvasSlot->SetAutoSize(false);
+	}
 }
 #endif
 

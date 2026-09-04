@@ -56,6 +56,15 @@ private:
 	 *  updates immediately without requiring a Blueprint compile. */
 	void SyncPreview() const;
 
+	/**
+	 * Refits the selected widget's Canvas slot so it exactly bounds all control points
+	 * (plus a fixed padding), re-normalizing control-point Locations relative to the new
+	 * slot origin so the on-screen curve does not move. No-ops for non-Canvas parents.
+	 * Must be called inside an open edit transaction so the slot + point changes are undone
+	 * together with the triggering edit.
+	 */
+	void FitSlotToControlPoints() const;
+
 	/** Gets the widget geometry in designer space, used to size the overlay. */
 	bool GetWidgetGeometry(FGeometry& OutGeometry) const;
 
@@ -105,4 +114,7 @@ private:
 
 	/** Extra control-space padding around the handle bounds so handle boxes are not clipped. */
 	static constexpr float HandleMarginControl = 16.0f;
+
+	/** Padding (widget-local px) kept between the control-point bounds and the Canvas slot edge. */
+	static constexpr float SlotPadding = 8.0f;
 };
